@@ -1,12 +1,36 @@
 import sys
 import cv2
 from PyQt5.QtWidgets import QApplication, QLabel, QPushButton, QMessageBox
-from PyQt5.QtGui import QImage, QPainter, QPainterPath
+from PyQt5.QtGui import QImage, QPainter, QPainterPath, QCursor, QPixmap
 from PyQt5.QtCore import Qt, QRectF, QTimer
+import ctypes
+from ctypes import wintypes
+import winreg
+
 
 if getattr(sys, 'frozen', False):
     # 这是打包后的环境，导入 pyi_splash
     import pyi_splash
+
+
+# 常量定义
+SPI_SETCURSORS = 0x0057
+SPIF_SENDCHANGE = 0x0002
+
+# 加载user32.dll的函数
+user32 = ctypes.WinDLL('user32', use_last_error=True)
+
+# 定义函数调用参数
+SystemParametersInfo = user32.SystemParametersInfoW
+SystemParametersInfo.argtypes = [wintypes.UINT, wintypes.UINT, wintypes.LPVOID, wintypes.UINT]
+SystemParametersInfo.restype = wintypes.BOOL
+
+# 注册表路径和键值
+MOUSE_REG_PATH = r"Control Panel\Cursors"
+CURSOR_KEYS = [
+    'Arrow', 'Help', 'AppStarting', 'Wait', 'Crosshair', 'IBeam',
+    'NWPen', 'No', 'SizeNS', 'SizeWE', 'SizeNWSE', 'SizeNESW', 'SizeAll', 'UpArrow', 'Hand'
+]
 
 class CircularCameraWindow(QLabel):
     def __init__(self):
@@ -45,6 +69,10 @@ class CircularCameraWindow(QLabel):
 
         self.m_drag = False  # 用于拖动窗口
 
+        # 程序启动时更改全局鼠标图标
+        # self.set_global_cursor('2.cur')  # 使用自定义的 .cur 文件
+        # 不能改变图标大小，暂时废弃
+
     def show_camera_error(self):
         msg_box = QMessageBox()
         msg_box.setWindowTitle("摄像头错误")
@@ -57,6 +85,7 @@ class CircularCameraWindow(QLabel):
     def update_frame(self):
         ret, frame = self.cap.read()
         if ret:
+            frame = cv2.flip(frame, 1)
             # 将 OpenCV 图像转换为 QImage，不做缩放处理
             height, width, channel = frame.shape
             bytesPerLine = 3 * width
@@ -86,6 +115,9 @@ class CircularCameraWindow(QLabel):
 
     def closeEvent(self, event):
         self.cap.release()
+        # 程序退出时恢复默认的鼠标图标
+        self.restore_default_cursor()
+        super().closeEvent(event)
 
     # 实现窗口拖动
     def mousePressEvent(self, event):
@@ -115,6 +147,34 @@ class CircularCameraWindow(QLabel):
     # 隐藏关闭按钮
     def hide_close_button(self):
         self.close_button.hide()
+    
+    def set_global_cursor(self, cursor_path):
+        """全局设置鼠标图标"""
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, MOUSE_REG_PATH, 0, winreg.KEY_SET_VALUE) as key:
+                winreg.SetValueEx(key, "CursorBaseSize", 0, winreg.REG_SZ, str(128))
+                for cursor in CURSOR_KEYS:
+                    winreg.SetValueEx(key, cursor, 0, winreg.REG_SZ, cursor_path)  # 将所有光标设置为自定义图标
+
+            # 刷新光标设置
+            SystemParametersInfo(SPI_SETCURSORS, 0, None, SPIF_SENDCHANGE)
+            print("全局光标已更改")
+        except WindowsError as e:
+            print(f"无法更改鼠标光标: {e}")
+
+    def restore_default_cursor(self):
+        """恢复系统默认的鼠标图标"""
+        try:
+            # 清空自定义光标配置，恢复默认值
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, MOUSE_REG_PATH, 0, winreg.KEY_SET_VALUE) as key:
+                for cursor in CURSOR_KEYS:
+                    winreg.DeleteValue(key, cursor)
+
+            # 刷新光标设置
+            SystemParametersInfo(SPI_SETCURSORS, 0, None, SPIF_SENDCHANGE)
+            print("全局光标已恢复")
+        except WindowsError as e:
+            print(f"无法恢复默认光标: {e}")
 
 # 主函数
 if __name__ == '__main__':
