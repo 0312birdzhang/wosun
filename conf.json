@@ -64,6 +64,18 @@
   {
    "optionDest": "bootloader_ignore_signals",
    "value": false
+  },
+  {
+   "optionDest": "datas",
+   "value": "D:/code/circle_webcam/2.cur;."
+  },
+  {
+   "optionDest": "datas",
+   "value": "D:/code/circle_webcam/close.png;."
+  },
+  {
+   "optionDest": "datas",
+   "value": "D:/code/circle_webcam/resize.png;."
   }
  ],
  "nonPyinstallerOptions": {

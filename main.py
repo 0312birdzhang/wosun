@@ -1,8 +1,8 @@
 import sys
 import cv2
 from PyQt5.QtWidgets import QApplication, QLabel, QPushButton, QMessageBox
-from PyQt5.QtGui import QImage, QPainter, QPainterPath, QCursor, QPixmap
-from PyQt5.QtCore import Qt, QRectF, QTimer
+from PyQt5.QtGui import QImage, QPainter, QPainterPath, QCursor, QPixmap, QIcon
+from PyQt5.QtCore import Qt, QRectF, QTimer, QPoint
 import ctypes
 from ctypes import wintypes
 import winreg
@@ -32,10 +32,57 @@ CURSOR_KEYS = [
     'NWPen', 'No', 'SizeNS', 'SizeWE', 'SizeNWSE', 'SizeNESW', 'SizeAll', 'UpArrow', 'Hand'
 ]
 
+
+class ResizeButton(QPushButton):
+    """用于实现缩放功能的自定义按钮"""
+    def __init__(self, parent):
+        super().__init__("<->",parent)
+        self.setFixedSize(25, 25)
+        self.setStyleSheet("background-color: blue; color: white; border-radius: 12px;")
+        self.is_resizing = False
+        self.m_DragPosition = None
+        self.SCREEN_HEIGHT = QApplication.primaryScreen().size().height()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            # 按下按钮时，进入缩放状态
+            self.is_resizing = True
+            self.m_DragPosition = event.globalPos().x()  # 记录按下位置
+            event.accept()
+
+    def mouseMoveEvent(self, event):
+        if self.is_resizing:
+            # 计算新的窗口大小，保持宽高一致
+            delta = self.m_DragPosition - event.globalPos().x()  # 计算位置变化
+
+            # 获取当前窗口大小
+            current_size = self.parent().width()
+
+            # 计算新的窗口大小
+            new_size = current_size + delta
+            
+            # 进行限制
+            new_size = max(self.SCREEN_HEIGHT // 9, new_size)  # 最小尺寸限制
+            max_size = self.SCREEN_HEIGHT // 2
+            new_size = min(max_size, new_size)  # 最大尺寸限制
+            
+            # 更新窗口大小
+            self.parent().setFixedSize(new_size, new_size)
+
+            # 更新拖动位置
+            self.m_DragPosition = event.globalPos().x()  # 更新拖动位置
+
+            # 更新按钮的位置
+            self.parent().update_button_positions()
+
+            event.accept()
+
+
+
 class CircularCameraWindow(QLabel):
     def __init__(self):
         super().__init__()
-        
+        self.SCREEN_HEIGHT = QApplication.primaryScreen().size().height()
         # 检测摄像头
         self.cap = cv2.VideoCapture(0)
         if not self.cap.isOpened():
@@ -46,7 +93,7 @@ class CircularCameraWindow(QLabel):
         
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)  # 无边框
         self.setAttribute(Qt.WA_TranslucentBackground)  # 透明背景
-        self.setFixedSize(250, 250)  # 固定窗口大小，确保圆形不会改变
+        self.setFixedSize(self.SCREEN_HEIGHT // 6, self.SCREEN_HEIGHT // 6)  # 固定窗口大小，确保圆形不会改变
 
         # 使用定时器不断刷新摄像头帧
         self.timer = QTimer(self)
@@ -54,29 +101,37 @@ class CircularCameraWindow(QLabel):
         self.timer.start(30)  # 每30毫秒刷新一次
 
         # 添加关闭按钮，默认隐藏
-        self.close_button = QPushButton('x', self)
-        self.close_button.setFixedSize(30, 30)
-        self.close_button.move(self.width() - 40, 10)  # 设置关闭按钮在右上角位置
-        self.close_button.setStyleSheet(
-            "background-color: red; color: white; border-radius: 15px; font-size: 16px;")
+        self.close_button = QPushButton('X', self)
+        # self.close_button.setIcon(QIcon("./close.png"))
+        self.close_button.setFixedSize(20, 20)
+        self.close_button.move(self.width() - 30, 10)  # 设置关闭按钮在右上角位置
+        self.close_button.setStyleSheet("background-color: red; color: white; border-radius: 15px; font-size: 16px;")
         self.close_button.clicked.connect(self.close)
         self.close_button.hide()  # 初始时隐藏
+
+        # 添加缩放按钮
+        self.resize_button = ResizeButton(self)
+        # self.resize_button.setIcon(QIcon("./resize.png"))
+        self.resize_button.move(10, 10)  # 设置在左上角位置
+        self.resize_button.hide()
 
         # 定时器用于控制按钮隐藏
         self.hide_timer = QTimer(self)
         self.hide_timer.setSingleShot(True)
         self.hide_timer.timeout.connect(self.hide_close_button)
+        self.hide_timer.timeout.connect(self.hide_resize_button)
 
         self.m_drag = False  # 用于拖动窗口
+        self.resizing = False  # 用于缩放窗口
+        self.resize_start_pos = None  # 记录缩放操作的起始位置
 
-        # 程序启动时更改全局鼠标图标
-        # self.set_global_cursor('2.cur')  # 使用自定义的 .cur 文件
-        # 不能改变图标大小，暂时废弃
+         # 设置初始按钮位置
+        self.update_button_positions()
 
     def show_camera_error(self):
         msg_box = QMessageBox()
         msg_box.setWindowTitle("摄像头错误")
-        msg_box.setText("没有可用的摄像头设备。")
+        msg_box.setText("没有可用的摄像头接入，请先插入摄像头。")
         msg_box.setIcon(QMessageBox.Warning)
         msg_box.setStandardButtons(QMessageBox.Ok)
         msg_box.exec_()  # 显示消息框
@@ -116,8 +171,18 @@ class CircularCameraWindow(QLabel):
     def closeEvent(self, event):
         self.cap.release()
         # 程序退出时恢复默认的鼠标图标
-        self.restore_default_cursor()
+        # self.restore_default_cursor()
         super().closeEvent(event)
+
+    def update_button_positions(self):
+        """更新按钮位置，使它们始终在圆形的边界上"""
+        radius = self.width() // 2
+
+        # 更新关闭按钮位置，位于右上角
+        self.close_button.move(self.width() - self.close_button.width() - 10, 10)
+
+        # 更新缩放按钮位置，位于左上角
+        self.resize_button.move(10, 10)
 
     # 实现窗口拖动
     def mousePressEvent(self, event):
@@ -127,7 +192,8 @@ class CircularCameraWindow(QLabel):
             event.accept()
 
     def mouseMoveEvent(self, event):
-        if Qt.LeftButton and self.m_drag:
+        if self.m_drag:
+            # 移动窗口
             self.move(event.globalPos() - self.m_DragPosition)
             event.accept()
 
@@ -137,6 +203,7 @@ class CircularCameraWindow(QLabel):
     # 鼠标进入窗口时显示关闭按钮
     def enterEvent(self, event):
         self.close_button.show()  # 显示关闭按钮
+        self.resize_button.show()
         if self.hide_timer.isActive():
             self.hide_timer.stop()  # 停止隐藏定时器
 
@@ -148,20 +215,9 @@ class CircularCameraWindow(QLabel):
     def hide_close_button(self):
         self.close_button.hide()
     
-    def set_global_cursor(self, cursor_path):
-        """全局设置鼠标图标"""
-        try:
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, MOUSE_REG_PATH, 0, winreg.KEY_SET_VALUE) as key:
-                winreg.SetValueEx(key, "CursorBaseSize", 0, winreg.REG_SZ, str(128))
-                for cursor in CURSOR_KEYS:
-                    winreg.SetValueEx(key, cursor, 0, winreg.REG_SZ, cursor_path)  # 将所有光标设置为自定义图标
-
-            # 刷新光标设置
-            SystemParametersInfo(SPI_SETCURSORS, 0, None, SPIF_SENDCHANGE)
-            print("全局光标已更改")
-        except WindowsError as e:
-            print(f"无法更改鼠标光标: {e}")
-
+    def hide_resize_button(self):
+        self.resize_button.hide()
+    
     def restore_default_cursor(self):
         """恢复系统默认的鼠标图标"""
         try:
